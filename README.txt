@@ -1,4 +1,4 @@
-# Hydra self testing Operative Model plots 
+#Hydra self testing Operative Model plots 
 
 OM_diag.Rmd reads the outputs from the OM and the input data from de HydraDataList object hydra_sim_GBself_5bin.rds
 
