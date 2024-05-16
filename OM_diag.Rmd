@@ -1,7 +1,9 @@
 ---
 title: "Hydra OM diagnostics"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
-output: html_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -26,7 +28,7 @@ library(compResidual)
 hydraDataList <- readRDS("inputs/hydra_sim_GBself_5bin.rds")
 
 #READ FITS FROM SARAHS DATA SETS
-repfile <- "inputs/OM/hydra_sim.rep"
+repfile <- "inputs/OM/02/hydra_sim.rep"
 #repfile <- "inputs/initial_run/hydra_sim.rep"
 
 output<-reptoRlist(repfile)
@@ -189,7 +191,7 @@ est_bio %>%
 ```
 
 
-```{r, eval=FALSE}
+```{r}
 est_bio %>% 
   ggplot() +
   aes(x = year, y = log_bio) +

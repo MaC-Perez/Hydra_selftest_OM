@@ -324,9 +324,9 @@ DATA_SECTION
   
   init_ivector stochrec(1,Nspecies)  //switch for stochastic recruitment
 
-  matrix rec_alpha(1,Nareas,1,Nspecies)
-  matrix rec_shape(1,Nareas,1,Nspecies)
-  matrix rec_beta(1,Nareas,1,Nspecies)
+  matrix rec_alpha(1,Nareas,1,Nspecies)//
+  matrix rec_shape(1,Nareas,1,Nspecies)//
+  matrix rec_beta(1,Nareas,1,Nspecies)//
 
   //initialize recruitment parameters for each type (case 9 no functional form, dummy pars)
   !!  for (area=1; area<=Nareas; area++){
