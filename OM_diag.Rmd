@@ -269,6 +269,7 @@ survey_sel <- output$survey_sel %>%
          species = hydraDataList$speciesList[species]) %>% 
   I()
 ```
+
 ```{r}
 survey_sel %>% 
   ggplot() +
@@ -293,6 +294,7 @@ survey_sel <- output$fishsel %>%
          species = hydraDataList$speciesList[species]) %>% 
   I()
 ```
+
 ```{r}
 survey_sel %>% 
   ggplot() +
