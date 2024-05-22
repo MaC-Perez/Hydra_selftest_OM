@@ -16,7 +16,7 @@
 # init_int Nsurveys (e.g. NEFSC spring, NEFSC fall, NEAMAP, etc)
   2
 # init_number wtconv
-  1
+  0.001
 ## Time series data file
   hydra_sim_GBself_5bin-ts.dat
 #
