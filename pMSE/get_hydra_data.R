@@ -1,5 +1,5 @@
-source("OM_MUST/pMSE/get_hydra_data_GB_5bin_1978_inpN_noM1.R")
-source("OM_MUST/pMSE/get_hydra.R")
+source("pMSE/get_hydra_data_GB_5bin_1978_inpN_noM1.R")
+source("pMSE/get_hydra.R")
 source("functions/hydra/read.report.R")
 library(tidyr)
 library(here)
