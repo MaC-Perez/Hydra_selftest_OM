@@ -4,6 +4,14 @@ library(dplyr)
 # Definir la ruta donde están los archivos .rds
 dataListRuta<- "OM_MUST/data"
 
+# not working
+#gdrive_shared <- "https://drive.google.com/drive/folders/12oWuIuguyKFsy1ozgzqyqSGY7MKoWz8T"
+#usethis::create_download_url(gdrive_shared) %>%
+#  url() %>%
+#  readRDS() %>%
+#  tibble::as_tibble()
+
+
 # Crear una lista con los nombres de los archivos .rds
 files <- list.files(path = dataListRuta, pattern = "\\.rds$", full.names = TRUE)
 
@@ -13,6 +21,13 @@ filestoread <- files[1:36]
 
 # Leer los archivos y almacenarlos en una lista
 dataList <- lapply(filestoread, readRDS)
+
+# save rds file in one object 
+write_rds(dataList, "rds_files.rds")
+
+
+#reading rds files
+rdsDataList <- readRDS("rds_files.rds")
 
 # Si deseas acceder a un archivo en particular, por ejemplo, el primero:
 File001 <- dataList[[1]]
