@@ -4,275 +4,360 @@ library(dplyr)
 library(purrr)
 library(stringr)
 library(slider)
+library(tidymodels)
+library(ggplot2)
 
 # Definir la ruta donde están los archivos .rds
 dataListRoute<- "OM_MUST/data"
 
-# not working
-#gdrive_shared <- "https://drive.google.com/drive/folders/12oWuIuguyKFsy1ozgzqyqSGY7MKoWz8T"
-#usethis::create_download_url(gdrive_shared) %>%
-#  url() %>%
-#  readRDS() %>%
-#  tibble::as_tibble()
-
 # Crear una lista con los nombres de los archivos .rds
 files <- list.files(path = dataListRoute, pattern = "\\.rds$", full.names = TRUE)
-
-# read rds files
-# now reading just 001 baseline scenario but could read the 36 scenarios
-filestoread <- files[1]#[1:36] 
-
+filestoread <- files #[12]#[1:36] 
 # make a list with the scenarios
 dataList <- lapply(filestoread, readRDS)
-
-# save rds file in one object 
 #write_rds(dataList, "rds_files.rds")
-#write_rds(dataList, "rds001_file.rds")
 
 #read saved object with 36 scenarios
 #rdsDataList <- readRDS("rds_files.rds")
 
-
-### TO READ JUST BASELINE SCENARIO 001 START HERE ---- 
-
-baseline<-readRDS("OM_MUST/data/001.rds")
-
-# read variables I need 
-#rdsDataList: a top-level list of length 1
-#Inside, rdsDataList[[1]] is a list of 11 components
-#Each of the main components you’ll use (biomass, catch, Fyrspecies, Fyrfleets, etc.) is itself a list of 50 — i.e., 50 runs/trajectories.
-#Each run element (e.g., rdsDataList[[1]]$biomass[[i]]) is a data frame with columns like Species, Year, Biomass, size1..size5.
-
-#Each component (e.g. biomass) is a list of 50 elements → these are the 50 stochastic runs/scenarios of the pMSE.
-#Each run element is usually a data frame:
-#Some are large (e.g. 720 rows × 8 columns → species × years × bins).
-#Others are smaller (e.g. 72 rows × 2 columns → maybe per-year totals, fleet-specific values, or advice tables).
-#The differences in shape depend on what the component represents (species-level by size, fleet-level by year, etc.).
-
-###CREATING VARIABLES ---- 
-
-## bind the 50 runs and tag run_id 
-
-bind_runs <- function(x) {
-  map2_dfr(x, seq_along(x), \(df, i) {
-    df <- as.data.frame(df)
-    df$run_id <- i
-    df
-  })
-}
-
-## 1) BIOMASS (species-specific) 
-stopifnot("biomass" %in% names(baseline))
-biomass_all <- bind_runs(baseline$biomass)  # Species, Year, Biomass, size1..size5, run_id
-
-# Long biomass (Species–Year–value)
-Bio <- biomass_all %>%
-  rename(Biomass = any_of(c("Biomass","biomass"))) %>%
-  select(run_id, Species, Year, Biomass) %>%
-  arrange(run_id, Species, Year)
-
-## 2) RECRUITMENT (R) assuming recruitment = to size1 
-Rec <- biomass_all %>%
-  mutate(Recruitment = if ("size1" %in% names(.)) size1 else NA_real_) %>%
-  select(run_id, Species, Year, Recruitment) %>%
-  arrange(run_id, Species, Year)
-
-## 3) CATCH (species-specific) 
-stopifnot("catch" %in% names(baseline))
-catch_all <- bind_runs(baseline$catch)
-
-Catch <- catch_all %>%
-  transmute(
-    run_id,
-    Species = species,
-    Year    = year,
-    PredCatch = predcatch,
-    ObsCatch  = obscatch
+biomass_all <- tibble(
+  ID = seq_along(dataList),
+  scenario = dataList
+) %>%
+  mutate(
+    biomass = map(scenario, "biomass")
   ) %>%
-  arrange(run_id, Species, Year)
+  select(ID, biomass) %>%
+  unnest_longer(biomass, indices_to = "isim") %>%
+  mutate(
+    biomass = map(biomass, as_tibble)
+  ) %>%
+  unnest(biomass) %>%
+  rename(
+    species = Species,
+    year = Year,
+    biomass = Biomass) %>%
+  select(ID, isim, species, year, biomass, size1, size2, size3, size4, size5)
 
-## 4) BIOMASS-AT-LENGTH (all bins) 
-# Long: one row per species-year-sizebin
-Bio_size <- biomass_all %>%
-  pivot_longer(cols = matches("^size\\d+$"),
-               names_to = "sizebin",
-               values_to = "bio_at_len") %>%
-  arrange(run_id, Species, Year, sizebin)
 
-##  5) Fishing mortality 
-
-# (a) By species
-#stopifnot("Fyrspecies" %in% names(baseline))
-#Fsp_all <- bind_runs(baseline$Fyrspecies) %>%
-#  rename_with(tolower)       # ensure: species, fleet, v3..vn, run_id
-
-#F_species <- Fsp_all %>%
-#  pivot_longer(
-#    cols = matches("^v\\d+$"),          # all columns named V<number>
-#    names_to = "vcol",
-#    values_to = "F"
-#  ) %>%
+#foragebiomass_all <- tibble(
+#  ID = seq_along(dataList),
+#  scenario = dataList
+#) %>%
 #  mutate(
-#    Year = as.integer(str_remove(vcol, "^v"))  # "v3" -> 3
+#    foragebiomass = map(scenario, "foragebiomass")
 #  ) %>%
-#  select(run_id, species, fleet, Year, F) %>%
-#  arrange(run_id, species, fleet, Year)
+#  select(ID, foragebiomass) %>%
+#  unnest_longer(foragebiomass, indices_to = "isim") %>%
+#  mutate(
+#    foragebiomass = map(foragebiomass, as_tibble)
+#  ) %>%
+#  unnest(foragebiomass) %>%
+#  rename(
+#    year = Year,
+#    foragebiomass = Biomass
+#  ) %>%
+#  select(ID, isim, year, foragebiomass)
 
-#F_species <- F_species %>%
-#  rename(Species = species, Fleet = fleet)
+
+catch_all <- tibble(
+  ID = seq_along(dataList),
+  scenario = dataList
+) %>%
+  mutate(
+    catch = map(scenario, "catch")
+  ) %>%
+  select(ID, catch) %>%
+  unnest_longer(catch, indices_to = "isim") %>%
+  mutate(
+    catch = map(catch, as_tibble)
+  ) %>%
+  unnest(catch)
 
 
-# (b) different way with years 
-stopifnot("Fyrspecies" %in% names(baseline))
+Ffleet_all <- tibble(
+  ID = seq_along(dataList),
+  scenario = dataList
+) %>%
+  mutate(
+    Ffleet = map(scenario, "Fyrfleets")
+  ) %>%
+  select(ID, Ffleet) %>%
+  unnest_longer(Ffleet, indices_to = "isim") %>%
+  mutate(
+    Ffleet = map(Ffleet, as_tibble)
+  ) %>%
+  unnest(Ffleet)
 
-Fsp_all <- bind_runs(baseline$Fyrspecies) %>%
-  rename_with(tolower)  # species, fleet, v3..vn, run_id
 
-F_species <- Fsp_all %>%
-  tidyr::pivot_longer(
-    cols = matches("^v\\d+$"),
-    names_to = "vcol",
+Fspecies_all <- tibble(
+  ID = seq_along(dataList),
+  scenario = dataList
+) %>%
+  mutate(
+    Fspecies = map(scenario, "Fyrspecies")
+  ) %>%
+  select(ID, Fspecies) %>%
+  unnest_longer(Fspecies, indices_to = "isim") %>%
+  mutate(
+    Fspecies = map(Fspecies, as_tibble)
+  ) %>%
+  unnest(Fspecies) %>%
+  rename_with(
+    ~ as.character(seq_along(.)),
+    starts_with("V")
+  )
+
+Fspecies_all <- Fspecies_all %>%
+  pivot_longer(
+    cols = matches("^\\d+$"),
+    names_to = "year",
     values_to = "F"
   ) %>%
-  dplyr::mutate(
-    vnum = as.integer(sub("^v", "", vcol)),
-    Year = vnum - 2L          # => V3=1, V4=2, V5=3, ...
+  mutate(
+    year = as.integer(year)
   ) %>%
-  dplyr::arrange(run_id, species, fleet, vnum) %>%
-  dplyr::select(run_id, Species = species, Fleet = fleet, Year, F)
+  select(ID, isim, species, fleet, year, F)
 
+write.csv(Ffleet_all, "Ffleet_all.csv", row.names = FALSE)
 
-# (b) By fleets
-stopifnot("Fyrfleets" %in% names(baseline))
-Ffleets_all <- bind_runs(baseline$Fyrfleets)
+#construir base de datos
 
-#NOT SURE HOW TO DO THIS DIFFERENT YEAR LENGTH 
+ML_data <- biomass_all %>%
+  select(ID, isim, species, year,
+         biomass, size1, size2, size3, size4, size5)
 
-##  Quick  checks 
- dplyr::glimpse(Bio)
- dplyr::glimpse(Rec)
- dplyr::glimpse(Catch)
- dplyr::glimpse(Bio_size)
- dplyr::glimpse(F_species)
- dplyr::glimpse(F_fleets)
+ML_data <- ML_data %>%
+  left_join(
+    foragebiomass_all %>%
+      rename(
+        foragebiomass = foragebiomass
+      ),
+    by = c("ID", "isim", "year")
+  )
 
-###CREATING ECOSYSTEM INDICATORS ---- 
- # interannual variability (IAV) 
- # interannual variability (IAV) for a time series.
- # first value is NA (no previous year to compare),
- # absolute year-to-year change divided by the average of the two years (a symmetric % change).
- 
- iav <- function(x) {
-   if (length(x) < 2) return(rep(NA_real_, length(x)))
-   c(NA_real_, abs(diff(x)) / ((x[-1] + x[-length(x)]) / 2))
- }
- 
- # 1) Total biomass and SD across species (per run_id, Year)\
- # biomass of species𝑠in that year - mean biomass across species / n number of species- 1) 
+ML_data <- ML_data %>%
+  left_join(catch_all, by = c("ID", "isim", "species", "year"))
 
- B_tot <- Bio %>%
-   group_by(run_id, Year) %>%
-   summarize(
-     B_total = sum(Biomass, na.rm = TRUE),
-     B_sd    = sd(Biomass, na.rm = TRUE),
-     .groups = "drop"
-   )
- 
- # 2) Total yield (pred & obs), then interannual variability on totals
- C_tot <- Catch %>%
-   group_by(run_id, Year) %>%
-   summarize(
-     Y_total_pred = if ("PredCatch" %in% names(.)) sum(PredCatch, na.rm = TRUE) else NA_real_,
-  #   Y_total_obs  = if ("ObsCatch"  %in% names(.)) sum(ObsCatch,  na.rm = TRUE) else NA_real_,
-     .groups = "drop"
-   ) %>%
-   arrange(run_id, Year) %>%
-   group_by(run_id) %>%
-   mutate(
-     C_IAV_pred = if ("Y_total_pred" %in% names(.)) iav(Y_total_pred) else NA_real_,
-  #   C_IAV_obs  = if ("Y_total_obs"  %in% names(.)) iav(Y_total_obs)  else NA_real_
-   ) %>%
-   ungroup()
- 
- # 3) Collapse count: species below threshold
- # Threshold = 20% of the run-specific max biomass for that species
- thresh <- Bio %>%
-   group_by(run_id, Species) %>%
-   summarize(B_thresh = 0.2 * max(Biomass, na.rm = TRUE), .groups = "drop")
- 
- Collapse <- Bio %>%
-   left_join(thresh, by = c("run_id","Species")) %>%
-   mutate(collapsed = as.integer(Biomass < B_thresh)) %>%
-   group_by(run_id, Year) %>%
-   summarize(Collapse_count = sum(collapsed, na.rm = TRUE), .groups = "drop")
- 
- # 4) Assemble ecosystem indicators table
- Eco_ind <- B_tot %>%
-   left_join(C_tot,     by = c("run_id","Year")) %>%
-   left_join(Collapse, by = c("run_id","Year")) %>%
-   arrange(run_id, Year)
- 
-#  dplyr::glimpse(Eco_ind)
-#  head(Eco_ind)  
- 
+ML_data <- ML_data %>%
+  left_join(Fspecies_all, by = c("ID", "isim", "species", "year"))
+
+ML_data <- ML_data %>%
+  select(-fleet.x, -fleet.y)
+
+#saveRDS(ML_data, "ML_data.rds")
+#write.csv(ML_data, "ML_data.csv", row.names = FALSE)
+
+### Building features
+
+features <- ML_data %>%
+  arrange(ID, isim, species, year) %>%
+  group_by(ID, isim, species) %>%
+  mutate(
+    biomass_lag1 = lag(biomass, 1),
+    biomass_lag2 = lag(biomass, 2),
+   # biomass_roll3 = slide_dbl(biomass, mean, .before = 2, .complete = TRUE, na.rm = TRUE),
+   # biomass_roll5 = slide_dbl(biomass, mean, .before = 4, .complete = TRUE, na.rm = TRUE),
+    
+   # foragebiomass_lag1 = lag(foragebiomass, 1),
+   # foragebiomass_lag2 = lag(foragebiomass, 2),
+   # foragebiomass_roll3 = slide_dbl(foragebiomass, mean, .before = 2, .complete = TRUE, na.rm = TRUE),
+   #  foragebiomass_roll5 = slide_dbl(foragebiomass, mean, .before = 4, .complete = TRUE, na.rm = TRUE),
+    
+   # predcatch_lag1 = lag(predcatch, 1),
+   # predcatch_lag2 = lag(predcatch, 2),
+   # predcatch_roll3 = slide_dbl(predcatch, mean, .before = 2, .complete = TRUE, na.rm = TRUE),
+   # predcatch_roll5 = slide_dbl(predcatch, mean, .before = 4, .complete = TRUE, na.rm = TRUE),
+    
+   # obscatch_lag1 = lag(obscatch, 1),
+   # obscatch_lag2 = lag(obscatch, 2),
+   # obscatch_roll3 = slide_dbl(obscatch, mean, .before = 2, .complete = TRUE, na.rm = TRUE),
+   # obscatch_roll5 = slide_dbl(obscatch, mean, .before = 4, .complete = TRUE, na.rm = TRUE),
+    
+   # F_lag1 = lag(F, 1),
+   # F_lag2 = lag(F, 2),
+   # F_roll3 = slide_dbl(F, mean, .before = 2, .complete = TRUE, na.rm = TRUE),
+   # F_roll5 = slide_dbl(F, mean, .before = 4, .complete = TRUE, na.rm = TRUE),
+    
+   # prop_size1 = if_else(biomass > 0, size1 / biomass, NA_real_),
+   # prop_size2 = if_else(biomass > 0, size2 / biomass, NA_real_),
+   # prop_size3 = if_else(biomass > 0, size3 / biomass, NA_real_),
+   # prop_size4 = if_else(biomass > 0, size4 / biomass, NA_real_),
+   # prop_size5 = if_else(biomass > 0, size5 / biomass, NA_real_)
+  ) %>%
+  ungroup()
+
+features <- features %>%
+  select(-size1, -size2, -size3, -size4, -size5, -area, -obscatch, -foragebiomass)
+
+biomass_wide <- features %>%
+  select(ID, isim, year, species, biomass) %>%
+  pivot_wider(
+    names_from = species,
+    values_from = biomass,
+    names_prefix = "biomass_sp"
+  )
+
+features_full <- features %>%
+  left_join(biomass_wide, by = c("ID", "isim", "year"))
+
+saveRDS(features_full, "features.rds")
+#write.csv(features, "features.csv", row.names = FALSE)
+
+################################
+###### ML ######################
+################################
+
+features <- readRDS("features.rds")
+
+#correlation matrix
+library(ggcorrplot)
+
+features %>%
+  filter(species == 1) %>%
+  select(where(is.numeric), -ID, -isim, -species) %>%
+  cor(use = "complete.obs") %>%
+  ggcorrplot(type = "lower")
+
+#---------------------------
+# 1. Split runs into train/test
+#---------------------------
+set.seed(123)
+
+features <- features %>%
+  mutate(isim_id = paste(ID, isim, sep = "_"))
+
+runs <- unique(features$isim_id)
+train_runs <- sample(runs, size = floor(0.75 * length(runs)))
+
+train_all <- features %>% filter(isim_id %in% train_runs)
+test_all  <- features %>% filter(!isim_id %in% train_runs)
+
+# select one species and get the training and testing data for that species
+
+fit_rf_species <- function(sp_name, train_df, test_df) {
   
-
-#### CREATING LAGGED VARIABLES AND ROLLING MEAN  ---- 
+  train_data <- train_df %>%
+    filter(species == sp_name) %>%
+    arrange(isim_id, year)
   
-# rolling mean helper (right-aligned)
-roll_mean_k <- function(x, k) slide_dbl(x, mean, .before = k - 1, .complete = TRUE, na.rm = TRUE)
+  test_data <- test_df %>%
+    filter(species == sp_name) %>%
+    arrange(isim_id, year)
   
-# generic lags+rolls adder for a long panel (grouped by keys, ordered by Year)
-add_lags_rolls <- function(df, group_keys, cols, lags = c(1, 2), rolls = c(3, 5)) {
-    df <- df %>%
-      group_by(across(all_of(group_keys))) %>%
-      arrange(Year, .by_group = TRUE)
-    for (col in cols) {
-      # lags
-      for (L in lags) {
-        df <- df %>% mutate(!!paste0(col, "_lag", L) := dplyr::lag(.data[[col]], L))
-      }
-      # rolling means
-      for (k in rolls) {
-        df <- df %>% mutate(!!paste0(col, "_roll", k) := roll_mean_k(.data[[col]], k))
-      }
-    }
-    ungroup(df)
+  # remove same species biomass 
+  col_to_remove <- paste0("biomass_sp", sp_name)
+  
+  train_data <- train_data %>% select(-all_of(col_to_remove))
+  test_data  <- test_data %>% select(-all_of(col_to_remove))
+  
+  if (nrow(train_data) == 0 || nrow(test_data) == 0) {
+    return(NULL)
   }
   
-  Var_ind <- Bio %>%
-    full_join(Rec,         by = c("run_id","Species","Year")) %>%
-    full_join(Catch,         by = c("run_id","Species","Year")) %>%
-    full_join(F_species, by = c("run_id","Species","Year"))
+  # Cross-validation grouped by run
+  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 3) # try with 3 
   
-  species_cols <- intersect(c("Biomass","Recruitment","PredCatch","ObsCatch","F"),
-                            names(Var_ind))
+  # Recipe
+  rf_recipe <- recipe(biomass ~ ., data = train_data) %>%
+    update_role(ID, isim, isim_id, year, species, new_role = "ID") %>%
+    step_dummy(all_nominal_predictors()) %>%
+    step_zv(all_predictors())
   
-  species_features <- add_lags_rolls(
-    df         = Var_ind,
-    group_keys = c("run_id","Species"),
-    cols       = species_cols,
-    lags       = c(1, 2),
-    rolls      = c(3, 5)
+  # Model
+  rf_model <- rand_forest(
+    mtry = tune(),
+    min_n = tune(),
+    trees = 100 # try with 100, 200 etc 
+  ) %>%
+    set_engine("ranger") %>%
+    set_mode("regression")
+  
+  # Workflow
+  rf_workflow <- workflow() %>%
+    add_recipe(rf_recipe) %>%
+    add_model(rf_model)
+  
+  # Grid
+  n_preds <- train_data %>%
+    select(-biomass,-ID, -isim, -isim_id,  -year, -species) %>%
+    ncol()
+  
+  rf_grid <- grid_regular(
+    mtry(range = c(1, min(10, n_preds))), # try with 10 
+    min_n(range = c(2, 10)), # try with 10
+    levels = 3 # try with 3 and 5  
   )
   
-#FLEET-LEVEL (F by fleet) 
-  # Expect: F_fleets_long(run_id, Fleet, Year, F)
- 
+  # Tune
+  rf_tuned <- tune_grid(
+    rf_workflow,
+    resamples = cv_splits,
+    grid = rf_grid,
+    metrics = metric_set(rmse, mae)
+  )
   
-# ECOSYSTEM-LEVEL 
-  # Expect: eco_ind(run_id, Year, B_total, Y_total_pred, Y_total_obs, ...)
-  if (exists("Eco_ind")) {
-    eco_cols <- intersect(c("B_total","Y_total_pred","Y_total_obs"), names(Eco_ind))
-    eco_features <- add_lags_rolls(
-      df         = Eco_ind,
-      group_keys = "run_id",
-      cols       = eco_cols,
-      lags       = c(1, 2),
-      rolls      = c(3, 5)
-    )
-  }
+  best_params <- select_best(rf_tuned, metric = "rmse")
   
-Eco_ind
+  final_rf <- finalize_workflow(rf_workflow, best_params)
+  
+  rf_fit <- fit(final_rf, data = train_data)
+  
+  rf_preds <- predict(rf_fit, test_data) %>%
+    bind_cols(test_data)
+  
+  model_metrics <- rf_preds %>%
+    metrics(truth = biomass, estimate = .pred)
+  
+  list(
+    species = sp_name,
+    fit = rf_fit,
+    preds = rf_preds,
+    metrics = model_metrics,
+    tuning = rf_tuned,
+    best_params = best_params
+  )
+}
 
-write_csv(species_features, "species_features.csv")
+
+species_list <- 1
+#species_list <- sort(unique(features$species))
+
+library(doParallel)
+
+cl <- makeCluster(parallel::detectCores() - 1)
+registerDoParallel(cl)
+
+start_time <- Sys.time()
+rf_results <- map(species_list, fit_rf_species,
+                  train_df = train_all,
+                  test_df = test_all)
+
+end_time <- Sys.time()
+print(end_time - start_time)
+
+names(rf_results) <- species_list
+
+# Remove NULLs if any species had no train/test rows
+rf_results <- compact(rf_results)
+
+
+all_metrics <- map_dfr(rf_results, ~ .x$metrics %>% mutate(species = .x$species))
+
+all_metrics
+
+stopCluster(cl)
+
+
+sp_example <- species_list[1]
+
+rf_results[[sp_example]]$preds %>%
+  ggplot(aes(x = biomass, y = .pred)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(
+    title = paste("Observed vs Predicted", sp_example),
+    x = "Observed biomass",
+    y = "Predicted biomass"
+  ) +
+  theme_minimal()
