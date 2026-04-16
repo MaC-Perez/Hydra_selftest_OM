@@ -256,7 +256,7 @@ fit_rf_species <- function(sp_name, train_df, test_df) {
   }
   
   # Cross-validation grouped by run
-  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 3) # try with 3 
+  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 5) # try with 3 
   
   # Recipe
   rf_recipe <- recipe(biomass ~ ., data = train_data) %>%
@@ -268,7 +268,7 @@ fit_rf_species <- function(sp_name, train_df, test_df) {
   rf_model <- rand_forest(
     mtry = tune(),
     min_n = tune(),
-    trees = 100 # try with 100, 200 etc 
+    trees = 200 # try with 100, 200 etc 
   ) %>%
     set_engine("ranger") %>%
     set_mode("regression")
@@ -284,9 +284,9 @@ fit_rf_species <- function(sp_name, train_df, test_df) {
     ncol()
   
   rf_grid <- grid_regular(
-    mtry(range = c(1, min(10, n_preds))), # try with 10 
-    min_n(range = c(2, 10)), # try with 10
-    levels = 3 # try with 3 and 5  
+    mtry(range = c(1, min(20, n_preds))), # try with 10 
+    min_n(range = c(2, 20)), # try with 10
+    levels = 5 # try with 3 and 5  
   )
   
   # Tune
