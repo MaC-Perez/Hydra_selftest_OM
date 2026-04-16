@@ -49,7 +49,7 @@ fit_rf_species <- function(sp_name, train_df, test_df) {
     arrange(isim_id, year)
   
   # remove same species biomass 
-  col_to_remove <- paste0("biomass_sp", sp_name)
+  col_to_remove <- paste0("biomass_", species_names[sp_name])
   
   train_data <- train_data %>% select(-all_of(col_to_remove))
   test_data  <- test_data %>% select(-all_of(col_to_remove))
@@ -59,7 +59,7 @@ fit_rf_species <- function(sp_name, train_df, test_df) {
   }
   
   # Cross-validation grouped by run
-  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 5) # try with 3 
+  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 3) # try with 3 
   
   # Recipe
   rf_recipe <- recipe(biomass ~ ., data = train_data) %>%
