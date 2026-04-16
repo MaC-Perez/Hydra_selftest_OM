@@ -1,19 +1,19 @@
-# Hydra self testing Operative Model plots 
+# Chapter 3: Machine learning 
 
-OM_diag.Rmd reads the outputs from the OM and the input data from de HydraDataList object hydra_sim_GBself_5bin.rds
+Use the xxx.R code to:
 
-hydra_sim_GBself_5bin.rds can be found in the folder "inputs" 
-and the rep files from the OM can be found inside the "OM" folder
+1) Loads multiple .rds simulation files from the pMSE project and organizes them into a list of scenarios.
+2) It extracts key outputs from each scenario (biomass, catch, and fishing mortality) and reshapes them into tidy tables.
+3) These datasets are merged into a single dataset (ML_data) containing species, time, biomass, and fishing information.
+4) It builds time-series features such as lagged biomass (previous years) for each species and simulation.
+5) The dataset is expanded to include biomass of all species as predictors using a wide format.
+6) This data frame is saved under "features" name so you dont have to run the first portion of the code
 
-original dat and pin files can be found in initial_run folder
-
-OM scenarios:
-1)
-2)
-3)
- 
-
-
-
-
-"others" folder: other scenarios of simulated data 4 fleets 5 bins   
+    START HERE
+   
+8) upload features matrix    
+9) A correlation matrix is generated to explore relationships among predictors for a selected species.
+10) The data is split into training and testing sets based on simulation runs (isim_id).
+11) A Random Forest model is defined, tuned (via cross-validation), and fitted separately for each species.
+12) Model performance is evaluated using metrics like RMSE and MAE on the test data.
+13) Finally, predictions are visualized and the total computation time is recorded using parallel processing.
