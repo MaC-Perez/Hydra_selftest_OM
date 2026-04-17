@@ -1,6 +1,6 @@
 # Chapter 3: Machine learning 
 
-Use the ML.R code to:
+Use the ML_feautres.R code to:
 
 1) Loads multiple .rds simulation files from the pMSE project and organizes them into a list of scenarios.
 2) It extracts key outputs from each scenario (biomass, catch, and fishing mortality) and reshapes them into tidy tables.
@@ -10,6 +10,8 @@ Use the ML.R code to:
 6) This data frame is saved under "features.rds" name so you dont have to run the first portion of the code
 
     START HERE
+
+Use the ML.R code to:
    
 8) upload features matrix "features.rds"   
 9) A correlation matrix is generated to explore relationships among predictors for a selected species.
