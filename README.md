@@ -13,9 +13,9 @@ Use the ML_feautres.R code to:
 
 Use the ML.R code to:
    
-8) upload features matrix "features.rds"   
-9) A correlation matrix is generated to explore relationships among predictors for a selected species.
-10) The data is split into training and testing sets based on simulation runs (isim_id).
-11) A Random Forest model is defined, tuned (via cross-validation), and fitted separately for each species.
-12) Model performance is evaluated using metrics like RMSE and MAE on the test data.
-13) Finally, predictions are visualized and the total computation time is recorded using parallel processing.
+7) upload features matrix "features.rds"   
+8) A correlation matrix is generated to explore relationships among predictors for a selected species.
+9) The data is split into training and testing sets based on simulation runs (isim_id).
+10) A Random Forest model is defined, tuned (via cross-validation), and fitted separately for each species.
+11) Model performance is evaluated using metrics like RMSE and MAE on the test data.
+12) Finally, predictions are visualized and the total computation time is recorded using parallel processing.
