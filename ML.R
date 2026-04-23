@@ -73,9 +73,10 @@ features <- features %>%
 library(ggcorrplot)
 
 features %>%
-  filter(species == 1) %>%
-  select(where(is.numeric), -ID, -isim, -species) %>%
+  filter(species == 1, ID == "036") %>%
+  select(where(is.numeric), -species, -ID, -isim, -biomass) %>%
   cor(use = "complete.obs") %>%
+  #ggcorrplot(type = "full")
   ggcorrplot(type = "lower")
 
 biomass_wide_lags <- biomass_wide %>%
@@ -107,9 +108,9 @@ train_all <- features %>% filter(isim_id %in% train_runs)
 test_all  <- features %>% filter(!isim_id %in% train_runs)
 
 #dim(train_all)
-#[1] 189000      7
-#> dim(test_all)
-#[1] 63000     7
+#[1] 135000      17
+#dim(test_all)
+#[1] 45000     17
 
 ### start with one species to test 
 species_list <- 1
