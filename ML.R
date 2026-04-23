@@ -152,7 +152,7 @@ fit_rf_species <- function(sp_name, train_df, test_df) {
     min_n = tune(),
     trees = 200
   ) %>%
-    set_engine("ranger") %>%
+    set_engine("ranger", importance = "permutation") %>%
     set_mode("regression")
   
   rf_workflow <- workflow() %>%
@@ -220,9 +220,15 @@ all_metrics <- map_dfr(rf_results, ~ .x$metrics %>% mutate(species = .x$species)
 
 all_metrics
 
-sp_example <- species_list[1]
 
-rf_results[[sp_example]]$preds %>%
+library(vip)
+rf_model_obj <- rf_results[[1]]$fit$fit$fit
+vip::vip(rf_model_obj)
+
+
+### plot
+
+rf_results[[species_list]]$preds %>%
   ggplot(aes(x = biomass, y = .pred)) +
   geom_point(alpha = 0.5) +
   geom_abline(slope = 1, intercept = 0, color = "red") +
@@ -232,4 +238,5 @@ rf_results[[sp_example]]$preds %>%
     y = "Predicted biomass"
   ) +
   theme_minimal()
+
 
