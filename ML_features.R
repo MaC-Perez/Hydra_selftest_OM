@@ -21,7 +21,8 @@ dataList <- lapply(filestoread, readRDS)
 #rdsDataList <- readRDS("rds_files.rds")
 
 biomass_all <- tibble(
-  ID = seq_along(dataList),
+  file = filestoread,
+  ID = str_remove(basename(filestoread), "\\.rds$"),
   scenario = dataList
 ) %>%
   mutate(
@@ -41,46 +42,33 @@ biomass_all <- tibble(
 
 
 catch_all <- tibble(
-  ID = seq_along(dataList),
+  file = filestoread,
+  ID = stringr::str_remove(basename(filestoread), "\\.rds$"),
   scenario = dataList
 ) %>%
   mutate(
-    catch = map(scenario, "catch")
+    catch = purrr::map(scenario, "catch")
   ) %>%
   select(ID, catch) %>%
   unnest_longer(catch, indices_to = "isim") %>%
   mutate(
-    catch = map(catch, as_tibble)
+    catch = purrr::map(catch, as_tibble)
   ) %>%
   unnest(catch)
 
 
-Ffleet_all <- tibble(
-  ID = seq_along(dataList),
-  scenario = dataList
-) %>%
-  mutate(
-    Ffleet = map(scenario, "Fyrfleets")
-  ) %>%
-  select(ID, Ffleet) %>%
-  unnest_longer(Ffleet, indices_to = "isim") %>%
-  mutate(
-    Ffleet = map(Ffleet, as_tibble)
-  ) %>%
-  unnest(Ffleet)
-
-
 Fspecies_all <- tibble(
-  ID = seq_along(dataList),
+  file = filestoread,
+  ID = stringr::str_remove(basename(filestoread), "\\.rds$"),
   scenario = dataList
 ) %>%
   mutate(
-    Fspecies = map(scenario, "Fyrspecies")
+    Fspecies = purrr::map(scenario, "Fyrspecies")
   ) %>%
   select(ID, Fspecies) %>%
   unnest_longer(Fspecies, indices_to = "isim") %>%
   mutate(
-    Fspecies = map(Fspecies, as_tibble)
+    Fspecies = purrr::map(Fspecies, as_tibble)
   ) %>%
   unnest(Fspecies) %>%
   rename_with(
@@ -123,7 +111,7 @@ biomass_wide <- ML_data %>%
 
 ML_data <- ML_data %>%
   left_join(biomass_wide, by = c("ID", "isim", "year")) %>%
-  filter(year <= 42)
+  filter(year > 42)
 
 ML_data <- ML_data %>%
   select(-fleet.x, -area, -obscatch)

@@ -33,19 +33,50 @@ ML_data <- ML_data %>%
 ###   not using this yet 
 ##########################################
 
+species_list <- 1
+
+
+target_col <- paste0("biomass_sp", species_list)
+
 year_features <- ML_data %>%
   arrange(ID, isim, year) %>%
   distinct(ID, isim, year, .keep_all = TRUE) %>%
   group_by(ID, isim) %>%
   mutate(
+    # lag1 for all species
     across(
       starts_with("biomass_sp"),
       ~ dplyr::lag(.x, 1),
       .names = "{.col}_lag1"
-    )
+    ),
+    
+    # lag2 only for selected species
+    !!paste0(target_col, "_lag2") := dplyr::lag(.data[[target_col]], 2),
+    
+    # lag1 for F
+    F_lag1 = dplyr::lag(F, 1)
   ) %>%
   ungroup() %>%
-  select(ID, isim, year, matches("^biomass_sp\\d+_lag1$"))
+  select(
+    ID, isim, year,
+    F_lag1,
+    matches("^biomass_sp\\d+_lag1$"),
+    all_of(paste0(target_col, "_lag2"))
+  )
+
+#year_features <- ML_data %>%
+#  arrange(ID, isim, year) %>%
+#  distinct(ID, isim, year, .keep_all = TRUE) %>%
+#  group_by(ID, isim) %>%
+#  mutate(
+#    across(
+#      starts_with("biomass_sp"),
+#      ~ dplyr::lag(.x, 1),
+#      .names = "{.col}_lag1"
+#    )
+#  ) %>%
+#  ungroup() %>%
+#  select(ID, isim, year, matches("^biomass_sp\\d+_lag1$"))
 
 features <- ML_data %>%
   left_join(year_features, by = c("ID", "isim", "year")) %>%
@@ -67,17 +98,19 @@ features <- features %>%
 
 ######### remove features I dont want to use 
 features <- features %>%
- select(-predcatch, -fleet.y)
+ select(-predcatch, -fleet.y, -F)
 
 #correlation matrix
 library(ggcorrplot)
 
-features %>%
-  filter(species == 1, ID == "036") %>%
+p<- features %>%
+  filter(species == 1, ID == "036") %>% #001 single species
   select(where(is.numeric), -species, -ID, -isim, -biomass) %>%
   cor(use = "complete.obs") %>%
   #ggcorrplot(type = "full")
   ggcorrplot(type = "lower")
+
+ggsave("plots/corr_matrix_sp1_ID036.png", plot = p, width = 8, height = 6, dpi = 300)
 
 biomass_wide_lags <- biomass_wide %>%
   group_by(ID, isim) %>%
@@ -108,9 +141,9 @@ train_all <- features %>% filter(isim_id %in% train_runs)
 test_all  <- features %>% filter(!isim_id %in% train_runs)
 
 #dim(train_all)
-#[1] 135000      17
+#[1] 135000      19
 #dim(test_all)
-#[1] 45000     17
+#[1] 45000     19
 
 ### start with one species to test 
 species_list <- 1
@@ -201,6 +234,7 @@ cl <- makeCluster(parallel::detectCores() - 1)
 registerDoParallel(cl)
 
 start_time <- Sys.time()
+print(start_time)
 
 rf_results <- map(
   species_list,
