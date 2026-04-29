@@ -1,4 +1,4 @@
-### libraries ----
+### LIBRARIES ----
 library(tidyverse)
 library(dplyr)
 library(purrr)
@@ -6,6 +6,16 @@ library(stringr)
 library(slider)
 library(tidymodels)
 library(ggplot2)
+library(recipes)
+library(parsnip)
+library(workflows)
+library(tune)
+library(rsample)
+library(yardstick)
+library(dials)
+library(vip)
+library(doParallel)
+
 
 #species_names <- c(
 #  "Atlantic_cod",
@@ -20,336 +30,76 @@ library(ggplot2)
 #  "Yellowtail_flounder"
 #)
 
-################################
-###### ML ######################
-################################
-
 ML_data <- readRDS("ML_data.rds")
+
 ML_data <- ML_data %>%
   arrange(ID, isim, species, year)
-# to test select one species 
 
-#####  Creates lagged variables for all the 10 species 
-###   not using this yet 
-##########################################
+species_list <- 1:10
+#species_list <- 1
 
-species_list <- 1
+#****************
+### MODEL 0 ----
+#****************
 
+model_name <- "m0"
 
-target_col <- paste0("biomass_sp", species_list)
+all_results_m0 <- list()
+all_metrics_m0 <- list()
 
-year_features <- ML_data %>%
-  arrange(ID, isim, year) %>%
-  distinct(ID, isim, year, .keep_all = TRUE) %>%
-  group_by(ID, isim) %>%
-  mutate(
-    # lag1 for all species
-    across(
-      starts_with("biomass_sp"),
-      ~ dplyr::lag(.x, 1),
-      .names = "{.col}_lag1"
-    ),
-    
-    # lag2 only for selected species
-    !!paste0(target_col, "_lag2") := dplyr::lag(.data[[target_col]], 2),
-    
-    # lag1 for F
-    F_lag1 = dplyr::lag(F, 1)
-  ) %>%
-  ungroup() %>%
-  select(
-    ID, isim, year,
-    F_lag1,
-    matches("^biomass_sp\\d+_lag1$"),
-    all_of(paste0(target_col, "_lag2"))
-  )
+model_start <- Sys.time()
 
-#year_features <- ML_data %>%
-#  arrange(ID, isim, year) %>%
-#  distinct(ID, isim, year, .keep_all = TRUE) %>%
-#  group_by(ID, isim) %>%
-#  mutate(
-#    across(
-#      starts_with("biomass_sp"),
-#      ~ dplyr::lag(.x, 1),
-#      .names = "{.col}_lag1"
-#    )
-#  ) %>%
-#  ungroup() %>%
-#  select(ID, isim, year, matches("^biomass_sp\\d+_lag1$"))
+tryCatch({
 
-features <- ML_data %>%
-  left_join(year_features, by = c("ID", "isim", "year")) %>%
-  mutate(isim_id = paste(ID, isim, sep = "_"))
-
-features <- features %>%
-  select(-matches("^biomass_sp\\d+$"))
-
-# predcatch_lag1 = lag(predcatch, 1),
-    # predcatch_lag2 = lag(predcatch, 2),
-    # predcatch_roll3 = slide_dbl(predcatch, mean, .before = 2, .complete = TRUE, na.rm = TRUE),
-    # predcatch_roll5 = slide_dbl(predcatch, mean, .before = 4, .complete = TRUE, na.rm = TRUE),
-    
-    # F_lag1 = lag(F, 1),
-    # F_lag2 = lag(F, 2),
-    # F_roll3 = slide_dbl(F, mean, .before = 2, .complete = TRUE, na.rm = TRUE),
-    # F_roll5 = slide_dbl(F, mean, .before = 4, .complete = TRUE, na.rm = TRUE),
-
-
-######### remove features I dont want to use 
-features <- features %>%
- select(-predcatch, -fleet.y, -F)
-
-#correlation matrix
-library(ggcorrplot)
-
-p<- features %>%
-  filter(species == 1, ID == "036") %>% #001 single species
-  select(where(is.numeric), -species, -ID, -isim, -biomass) %>%
-  cor(use = "complete.obs") %>%
-  #ggcorrplot(type = "full")
-  ggcorrplot(type = "lower")
-
-#ggsave("plots/corr_matrix_sp1_ID036.png", plot = p, width = 8, height = 6, dpi = 300)
-
-biomass_wide_lags <- biomass_wide %>%
-  group_by(ID, isim) %>%
-  mutate(
-    across(
-      starts_with("biomass_sp"),
-      list(
-        lag1 = ~lag(.x, 1),
-        lag2 = ~lag(.x, 2)
-      ),
-      .names = "{.col}_{.fn}"
-    )
-  ) %>%
-  ungroup()
-
-
-###########################
-#### START ML MODEL 1 #####
-###########################
-
-set.seed(123)
-
-#split sims train and test by isimID
-runs <- unique(features$isim_id)
-train_runs <- sample(runs, size = floor(0.75 * length(runs)))
-
-train_all <- features %>% filter(isim_id %in% train_runs)
-test_all  <- features %>% filter(!isim_id %in% train_runs)
-
-#dim(train_all)
-#[1] 135000      19
-#dim(test_all)
-#[1] 45000     19
-
-### start with one species to test 
-species_list <- 1
-#species_list <- sort(unique(features$species))
-
-
-fit_rf_species <- function(sp_name, train_df, test_df) {
+for (sp_name in species_list) {
   
-  train_data <- train_df %>%
-    filter(species == sp_name) %>%
-    arrange(isim_id, year) %>%
-    drop_na()
+  cat("Running Model 0, species:", sp_name, "\n")
   
-  test_data <- test_df %>%
-    filter(species == sp_name) %>%
-    arrange(isim_id, year) %>%
-    drop_na()
+  target_col <- paste0("biomass_sp", sp_name)
   
-  dup_current <- paste0("biomass_sp", sp_name)
-  
-  train_data <- train_data %>%
-    select(-any_of(dup_current))
-  
-  test_data <- test_data %>%
-    select(-any_of(dup_current))
-  
-  if (nrow(train_data) == 0 || nrow(test_data) == 0) {
-    return(NULL)
-  }
-  
-  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 5)
-  
-  rf_recipe <- recipe(biomass ~ ., data = train_data) %>%
-    update_role(ID, isim, isim_id, year, species, new_role = "ID") %>%
-    step_zv(all_predictors())
-  
-  rf_model <- rand_forest(
-    mtry = tune(),
-    min_n = tune(),
-    trees = 200
-  ) %>%
-    set_engine("ranger", importance = "permutation") %>%
-    set_mode("regression")
-  
-  rf_workflow <- workflow() %>%
-    add_recipe(rf_recipe) %>%
-    add_model(rf_model)
-  
-  n_preds <- train_data %>%
-    select(-biomass, -ID, -isim, -isim_id, -year, -species) %>%
-    ncol()
-  
-  rf_grid <- grid_regular(
-    mtry(range = c(1, min(20, n_preds))),
-    min_n(range = c(2, 20)),
-    levels = 5
-  )
-  
-  rf_tuned <- tune_grid(
-    rf_workflow,
-    resamples = cv_splits,
-    grid = rf_grid,
-    metrics = metric_set(rmse, rsq, mae)
-  )
-  
-  best_params <- select_best(rf_tuned, metric = "rmse")
-  final_rf <- finalize_workflow(rf_workflow, best_params)
-  rf_fit <- fit(final_rf, data = train_data)
-  
-  rf_preds <- predict(rf_fit, test_data) %>%
-    bind_cols(test_data)
-  
-  model_metrics <- rf_preds %>%
-    metrics(truth = biomass, estimate = .pred)
-  
-  list(
-    species = sp_name,
-    fit = rf_fit,
-    preds = rf_preds,
-    metrics = model_metrics,
-    tuning = rf_tuned,
-    best_params = best_params
-  )
-}
-
-library(doParallel)
-cl <- makeCluster(parallel::detectCores() - 1)
-registerDoParallel(cl)
-
-start_time <- Sys.time()
-print(start_time)
-
-rf_results <- map(
-  species_list,
-  fit_rf_species,
-  train_df = train_all,
-  test_df = test_all
-)
-
-end_time <- Sys.time()
-print(end_time - start_time)
-
-stopCluster(cl)
-
-rf_results <- compact(rf_results)
-
-all_metrics <- map_dfr(rf_results, ~ .x$metrics %>% mutate(species = .x$species))
-
-all_metrics
-
-
-library(vip)
-rf_model_obj <- rf_results[[1]]$fit$fit$fit
-p1<-vip::vip(rf_model_obj)
-
-ggsave("plots/var_importance_sp1.png", plot = p1, width = 8, height = 6, dpi = 300)
-
-
-### plot
-
-p3<-rf_results[[species_list]]$preds %>%
-  ggplot(aes(x = biomass, y = .pred)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, color = "red") +
-  labs(
-    title = paste("Observed vs Predicted", sp_example),
-    x = "Observed biomass",
-    y = "Predicted biomass"
-  ) +
-  theme_minimal()
-
-ggsave("plots/model1_sp1.png", plot = p3, width = 8, height = 6, dpi = 300)
-
-###########################
-#### START ML MODEL 2 HORIZON 2 AND 3 #####
-###########################
-
-
-make_horizon_features <- function(ML_data, species_id = 1, horizon = 2) {
-  
-  target_col <- paste0("biomass_sp", species_id)
-  
-  ML_data %>%
+  features_m0 <- ML_data %>%
     arrange(ID, isim, year) %>%
     distinct(ID, isim, year, .keep_all = TRUE) %>%
     group_by(ID, isim) %>%
     mutate(
-      biomass_target = lead(.data[[target_col]], horizon),
-      F_t   = F,
-      F_t1  = lead(F, 1),
-      F_t2  = lead(F, 2),
-      F_t3  = lead(F, 3)
+      # response = biomass at time t
+      biomass_target = .data[[target_col]],
+      
+      # lagged predictors (t-1)
+      across(
+        starts_with("biomass_sp"),
+        ~ lag(.x, 1),
+        .names = "{.col}_lag1"
+      ),
+      
+      # fishing lag
+      F_lag1 = lag(F, 1)
     ) %>%
     ungroup() %>%
     mutate(
-      species = species_id,
+      species = sp_name,
       isim_id = paste(ID, isim, sep = "_")
     ) %>%
     select(
       ID, isim, isim_id, species, year,
       biomass_target,
-      F_t, F_t1, F_t2, F_t3,
-      starts_with("biomass_sp")
+      F_lag1,
+      matches("^biomass_sp\\d+_lag1$")
     ) %>%
     drop_na()
-}
-
-features_t2_sp1 <- make_horizon_features(ML_data, species_id = 1, horizon = 2)
-
-#features_t3_sp1 <- make_horizon_features(ML_data, species_id = 1, horizon = 3, max_F_lead = 3)
-
-
-set.seed(123)
-
-#split sims train and test by isimID
-runs <- unique(features_t2_sp1$isim_id)
-train_runs <- sample(runs, size = floor(0.75 * length(runs)))
-
-train_all <- features_t2_sp1 %>% filter(isim_id %in% train_runs)
-test_all  <- features_t2_sp1 %>% filter(!isim_id %in% train_runs)
-
-#dim(train_all)
-#[1] 135000      19
-#dim(test_all)
-#[1] 45000     19
-
-### start with one species to test 
-species_list <- 1
-#species_list <- sort(unique(features$species))
-
-
-fit_rf_species <- function(sp_name, train_df, test_df) {
   
-  train_data <- train_df %>%
-    filter(species == sp_name) %>%
-    arrange(isim_id, year) %>%
-    drop_na()
+  set.seed(123)
   
-  test_data <- test_df %>%
-    filter(species == sp_name) %>%
-    arrange(isim_id, year) %>%
-    drop_na()
+  runs <- unique(features_m0$isim_id)
+  train_runs <- sample(runs, size = floor(0.75 * length(runs)))
   
-  if (nrow(train_data) == 0 || nrow(test_data) == 0) {
-    return(NULL)
-  }
+  train_data <- features_m0 %>%
+    filter(isim_id %in% train_runs) %>%
+    arrange(isim_id, year)
+  
+  test_data <- features_m0 %>%
+    filter(!isim_id %in% train_runs) %>%
+    arrange(isim_id, year)
   
   cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 5)
   
@@ -379,6 +129,8 @@ fit_rf_species <- function(sp_name, train_df, test_df) {
     levels = 5
   )
   
+  start_time <- Sys.time()
+  
   rf_tuned <- tune_grid(
     rf_workflow,
     resamples = cv_splits,
@@ -393,65 +145,656 @@ fit_rf_species <- function(sp_name, train_df, test_df) {
   rf_preds <- predict(rf_fit, test_data) %>%
     bind_cols(test_data)
   
-  model_metrics <- rf_preds %>%
-    metrics(truth = biomass_target, estimate = .pred)
+  end_time <- Sys.time()
+  runtime_min <- as.numeric(difftime(end_time, start_time, units = "mins"))
   
-  list(
+  cat("Species:", sp_name,
+      "Model:", model_name,
+      "Runtime (min):", round(runtime_min, 2), "\n")
+  
+  model_metrics <- rf_preds %>%
+    metrics(truth = biomass_target, estimate = .pred) %>%
+    mutate(
+      species = sp_name,
+      model = model_name,
+      runtime_min = runtime_min
+    )
+  
+  all_results_m0[[paste0("sp", sp_name)]] <- list(
     species = sp_name,
+    model = model_name,
+    fit = rf_fit,
+    preds = rf_preds,
+    metrics = model_metrics
+  )
+  
+  all_metrics_m0[[paste0("sp", sp_name)]] <- model_metrics
+}
+
+model_end <- Sys.time()
+
+cat("Total runtime for model", model_name, ":",
+    round(as.numeric(difftime(model_end, model_start, units = "mins")), 2),
+    "minutes\n")
+
+}, error = function(e) {
+  cat("Error:", e$message, "\n")
+}, finally = {
+  
+  beep <- readWave("uboot_sonar_sms.wav")
+  play(beep)
+  
+  cat("Model finished at:", Sys.time(), "\n")
+})
+
+
+metrics_m0 <- bind_rows(all_metrics_m0)
+
+#metrics_m0
+
+#p_vip_m0_sp1 <- vip::vip(all_results_m0[["sp1"]]$fit$fit$fit)
+
+for (sp_name in species_list) {
+  
+  result_name <- paste0("sp", sp_name)
+  
+  # Variable importance plot
+  p_vip <- vip::vip(all_results_m0[[result_name]]$fit$fit$fit)
+  
+  ggsave(
+    paste0("plots/RF/M0/var_m0_sp", sp_name, ".png"),
+    plot = p_vip,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+  
+  # Observed vs predicted plot
+  p_model <- all_results_m0[[result_name]]$preds %>%
+    ggplot(aes(x = biomass_target, y = .pred)) +
+    geom_point(alpha = 0.5) +
+    geom_abline(slope = 1, intercept = 0, color = "red") +
+    labs(
+      title = paste0("Observed vs Predicted Mod 0", sp_name),
+      x = "Observed biomass(t)",
+      y = "Predicted biomass(t)"
+    ) +
+    theme_minimal()
+  
+  ggsave(
+    paste0("plots/RF/M0/model_m0_sp", sp_name, ".png"),
+    plot = p_model,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+}
+
+#****************
+### MODEL 1 ----
+#****************
+  
+all_results_m1 <- list()
+all_metrics_m1 <- list()
+
+tryCatch({
+  
+for (sp_name in species_list) {
+  model_name <- "t1"
+  model_start <- Sys.time()
+  
+  cat("Running Model 1, species:", sp_name, "\n")
+  
+  target_col <- paste0("biomass_sp", sp_name)
+  
+  features_full <- ML_data %>%
+    arrange(ID, isim, year) %>%
+    distinct(ID, isim, year, .keep_all = TRUE) %>%
+    group_by(ID, isim) %>%
+    mutate(
+      biomass_target = lead(.data[[target_col]], 1),
+      F_t = F
+    ) %>%
+    ungroup() %>%
+    mutate(
+      species = sp_name,
+      isim_id = paste(ID, isim, sep = "_")
+    ) %>%
+    select(
+      ID, isim, isim_id, species, year,
+      biomass_target,
+      F_t,
+      starts_with("biomass_sp")
+    ) %>%
+    drop_na()
+  
+  set.seed(123)
+  
+  runs <- unique(features_full$isim_id)
+  train_runs <- sample(runs, size = floor(0.75 * length(runs)))
+  
+  train_data <- features_full %>%
+    filter(isim_id %in% train_runs) %>%
+    arrange(isim_id, year)
+  
+  test_data <- features_full %>%
+    filter(!isim_id %in% train_runs) %>%
+    arrange(isim_id, year)
+  
+  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 5)
+  
+  rf_recipe <- recipe(biomass_target ~ ., data = train_data) %>%
+    update_role(ID, isim, isim_id, year, species, new_role = "ID") %>%
+    step_zv(all_predictors())
+  
+  rf_model <- rand_forest(
+    mtry = tune(),
+    min_n = tune(),
+    trees = 200
+  ) %>%
+    set_engine("ranger", importance = "permutation") %>%
+    set_mode("regression")
+  
+  rf_workflow <- workflow() %>%
+    add_recipe(rf_recipe) %>%
+    add_model(rf_model)
+  
+  n_preds <- train_data %>%
+    select(-biomass_target, -ID, -isim, -isim_id, -year, -species) %>%
+    ncol()
+  
+  rf_grid <- grid_regular(
+    mtry(range = c(1, min(20, n_preds))),
+    min_n(range = c(2, 20)),
+    levels = 5
+  )
+  
+  start_time <- Sys.time()
+  
+  rf_tuned <- tune_grid(
+    rf_workflow,
+    resamples = cv_splits,
+    grid = rf_grid,
+    metrics = metric_set(rmse, rsq, mae)
+  )
+  
+  best_params <- select_best(rf_tuned, metric = "rmse")
+  final_rf <- finalize_workflow(rf_workflow, best_params)
+  rf_fit <- fit(final_rf, data = train_data)
+  
+  rf_preds <- predict(rf_fit, test_data) %>%
+    bind_cols(test_data)
+  
+  end_time <- Sys.time()
+  
+  runtime_min <- as.numeric(difftime(end_time, start_time, units = "mins"))
+  
+  cat("Species:", sp_name,
+      "Model:", "t1",
+      "Runtime (min):", round(runtime_min, 2), "\n")
+  
+  model_metrics <- rf_preds %>%
+    metrics(truth = biomass_target, estimate = .pred) %>%
+    mutate(
+      species = sp_name,
+      model = "t1",
+      runtime_min = runtime_min
+    )
+  
+  all_results_m1[[paste0("sp", sp_name)]] <- list(
+    species = sp_name,
+    model = "t1",
     fit = rf_fit,
     preds = rf_preds,
     metrics = model_metrics,
     tuning = rf_tuned,
     best_params = best_params
   )
+  
+  all_metrics_m1[[paste0("sp", sp_name)]] <- model_metrics
 }
 
-library(doParallel)
-cl <- makeCluster(parallel::detectCores() - 1)
-registerDoParallel(cl)
+model_end <- Sys.time()
 
-start_time <- Sys.time()
-print(start_time)
+cat("Total runtime for model", model_name, ":",
+    round(as.numeric(difftime(model_end, model_start, units = "mins")), 2),
+    "minutes\n")
 
-rf_results <- map(
-  species_list,
-  fit_rf_species,
-  train_df = train_all,
-  test_df = test_all
-)
+}, error = function(e) {
+  cat("Error:", e$message, "\n")
+}, finally = {
+  
+  beep <- readWave("uboot_sonar_sms.wav")
+  play(beep)
+  
+  cat("Model finished at:", Sys.time(), "\n")
+})
 
-end_time <- Sys.time()
-print(end_time - start_time)
+metrics_m1 <- bind_rows(all_metrics_m1)
+#metrics_m1
+#p_vip_m1_sp1 <- vip::vip(all_results_m1[["sp1"]]$fit$fit$fit)
 
-stopCluster(cl)
+for (sp_name in species_list) {
+  
+  result_name <- paste0("sp", sp_name)
+  
+  # Variable importance plot
+  p_vip <- vip::vip(all_results_m0[[result_name]]$fit$fit$fit)
+  
+  ggsave(
+    paste0("plots/RF/M1/var_m1_sp", sp_name, ".png"),
+    plot = p_vip,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+  
+  # Observed vs predicted plot
+  p_model <- all_results_m0[[result_name]]$preds %>%
+    ggplot(aes(x = biomass_target, y = .pred)) +
+    geom_point(alpha = 0.5) +
+    geom_abline(slope = 1, intercept = 0, color = "red") +
+    labs(
+      title = paste0("Observed vs Predicted Mod 1", sp_name),
+      x = "Observed biomass(t)",
+      y = "Predicted biomass(t)"
+    ) +
+    theme_minimal()
+  
+  ggsave(
+    paste0("plots/RF/M1/model_m1_sp", sp_name, ".png"),
+    plot = p_model,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+}
 
-rf_results <- compact(rf_results)
+#saveRDS(all_results_m1, "model1_t1_all_species.rds")
+#write.csv(metrics_m1, "model1_t1_all_species.csv", row.names = FALSE)
 
-all_metrics <- map_dfr(rf_results, ~ .x$metrics %>% mutate(species = .x$species))
+#****************
+### MODEL 2 ----
+#****************
+  
+all_results_m2 <- list()
+all_metrics_m2 <- list()
 
-all_metrics
+tryCatch({
+
+for (sp_name in species_list) {
+  model_name <- "t2"
+  model_start <- Sys.time()
+  
+  cat("Running Model 2, species:", sp_name, "\n")
+  
+  target_col <- paste0("biomass_sp", sp_name)
+  
+  features_full <- ML_data %>%
+    arrange(ID, isim, year) %>%
+    distinct(ID, isim, year, .keep_all = TRUE) %>%
+    group_by(ID, isim) %>%
+    mutate(
+      biomass_target = lead(.data[[target_col]], 2),
+      F_t  = F,
+      F_t1 = lead(F, 1),
+      F_t2 = lead(F, 2)
+    ) %>%
+    ungroup() %>%
+    mutate(
+      species = sp_name,
+      isim_id = paste(ID, isim, sep = "_")
+    ) %>%
+    select(
+      ID, isim, isim_id, species, year,
+      biomass_target,
+      F_t, F_t1, F_t2,
+      starts_with("biomass_sp")
+    ) %>%
+    drop_na()
+  
+  set.seed(123)
+  
+  runs <- unique(features_full$isim_id)
+  train_runs <- sample(runs, size = floor(0.75 * length(runs)))
+  
+  train_data <- features_full %>%
+    filter(isim_id %in% train_runs) %>%
+    arrange(isim_id, year)
+  
+  test_data <- features_full %>%
+    filter(!isim_id %in% train_runs) %>%
+    arrange(isim_id, year)
+  
+  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 5)
+  
+  rf_recipe <- recipe(biomass_target ~ ., data = train_data) %>%
+    update_role(ID, isim, isim_id, year, species, new_role = "ID") %>%
+    step_zv(all_predictors())
+  
+  rf_model <- rand_forest(
+    mtry = tune(),
+    min_n = tune(),
+    trees = 200
+  ) %>%
+    set_engine("ranger", importance = "permutation") %>%
+    set_mode("regression")
+  
+  rf_workflow <- workflow() %>%
+    add_recipe(rf_recipe) %>%
+    add_model(rf_model)
+  
+  n_preds <- train_data %>%
+    select(-biomass_target, -ID, -isim, -isim_id, -year, -species) %>%
+    ncol()
+  
+  rf_grid <- grid_regular(
+    mtry(range = c(1, min(20, n_preds))),
+    min_n(range = c(2, 20)),
+    levels = 5
+  )
+  
+  start_time <- Sys.time()
+  
+  rf_tuned <- tune_grid(
+    rf_workflow,
+    resamples = cv_splits,
+    grid = rf_grid,
+    metrics = metric_set(rmse, rsq, mae)
+  )
+  
+  best_params <- select_best(rf_tuned, metric = "rmse")
+  final_rf <- finalize_workflow(rf_workflow, best_params)
+  rf_fit <- fit(final_rf, data = train_data)
+  
+  rf_preds <- predict(rf_fit, test_data) %>%
+    bind_cols(test_data)
+  
+  end_time <- Sys.time()
+  
+  runtime_min <- as.numeric(difftime(end_time, start_time, units = "mins"))
+  
+  cat("Species:", sp_name,
+      "Model:", "t2",
+      "Runtime (min):", round(runtime_min, 2), "\n")
+  
+  model_metrics <- rf_preds %>%
+    metrics(truth = biomass_target, estimate = .pred) %>%
+    mutate(
+      species = sp_name,
+      model = "t2",
+      runtime_min = as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+    )
+  
+  all_results_m2[[paste0("sp", sp_name)]] <- list(
+    species = sp_name,
+    model = "t2",
+    fit = rf_fit,
+    preds = rf_preds,
+    metrics = model_metrics,
+    tuning = rf_tuned,
+    best_params = best_params
+  )
+  
+  all_metrics_m2[[paste0("sp", sp_name)]] <- model_metrics
+}
+
+model_start <- Sys.time()
+cat("Total runtime for model", model_name, ":",
+    round(as.numeric(difftime(model_end, model_start, units = "mins")), 2),
+    "minutes\n")
+
+}, error = function(e) {
+  cat("Error:", e$message, "\n")
+}, finally = {
+  
+  beep <- readWave("uboot_sonar_sms.wav")
+  play(beep)
+  
+  cat("Model finished at:", Sys.time(), "\n")
+})
 
 
-library(vip)
-rf_model_obj <- rf_results[[1]]$fit$fit$fit
-p1<-vip::vip(rf_model_obj)
+metrics_m2 <- bind_rows(all_metrics_m2)
+#metrics_m2
+#p_vip_m2_sp1 <- vip::vip(all_results_m2[["sp1"]]$fit$fit$fit)
 
-ggsave("plots/var_importance_sp1.png", plot = p1, width = 8, height = 6, dpi = 300)
+for (sp_name in species_list) {
+  
+  result_name <- paste0("sp", sp_name)
+  
+  # Variable importance plot
+  p_vip <- vip::vip(all_results_m0[[result_name]]$fit$fit$fit)
+  
+  ggsave(
+    paste0("plots/RF/M2/var_m2_sp", sp_name, ".png"),
+    plot = p_vip,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+  
+  # Observed vs predicted plot
+  p_model <- all_results_m0[[result_name]]$preds %>%
+    ggplot(aes(x = biomass_target, y = .pred)) +
+    geom_point(alpha = 0.5) +
+    geom_abline(slope = 1, intercept = 0, color = "red") +
+    labs(
+      title = paste0("Observed vs Predicted Mod2", sp_name),
+      x = "Observed biomass(t)",
+      y = "Predicted biomass(t)"
+    ) +
+    theme_minimal()
+  
+  ggsave(
+    paste0("plots/RF/M2/model_m2_sp", sp_name, ".png"),
+    plot = p_model,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+}
 
+#saveRDS(all_results_m2, "model2_t2_all_species.rds")
+#write.csv(metrics_m2, "model2_t2_all_species.csv", row.names = FALSE)
 
-### plot
+#****************
+### MODEL 3 ----
+#****************
+  
+all_results_m3 <- list()
+all_metrics_m3 <- list()
 
-p3<-rf_results[[species_list]]$preds %>%
-  ggplot(aes(x = biomass_target, y = .pred)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, color = "red") +
-  labs(
-    title = paste("Observed vs Predicted", sp_example),
-    x = "Observed biomass",
-    y = "Predicted biomass"
-  ) +
-  theme_minimal()
+tryCatch({
+  
+for (sp_name in species_list) {
+  model_name <- "t3"
+  model_start <- Sys.time()
+  
+  cat("Running Model 3, species:", sp_name, "\n")
+  
+  target_col <- paste0("biomass_sp", sp_name)
+  
+  features_full <- ML_data %>%
+    arrange(ID, isim, year) %>%
+    distinct(ID, isim, year, .keep_all = TRUE) %>%
+    group_by(ID, isim) %>%
+    mutate(
+      biomass_target = lead(.data[[target_col]], 3),
+      F_t  = F,
+      F_t1 = lead(F, 1),
+      F_t2 = lead(F, 2),
+      F_t3 = lead(F, 3)
+    ) %>%
+    ungroup() %>%
+    mutate(
+      species = sp_name,
+      isim_id = paste(ID, isim, sep = "_")
+    ) %>%
+    select(
+      ID, isim, isim_id, species, year,
+      biomass_target,
+      F_t, F_t1, F_t2, F_t3,
+      starts_with("biomass_sp")
+    ) %>%
+    drop_na()
+  
+  set.seed(123)
+  
+  runs <- unique(features_full$isim_id)
+  train_runs <- sample(runs, size = floor(0.75 * length(runs)))
+  
+  train_data <- features_full %>%
+    filter(isim_id %in% train_runs) %>%
+    arrange(isim_id, year)
+  
+  test_data <- features_full %>%
+    filter(!isim_id %in% train_runs) %>%
+    arrange(isim_id, year)
+  
+  cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 5)
+  
+  rf_recipe <- recipe(biomass_target ~ ., data = train_data) %>%
+    update_role(ID, isim, isim_id, year, species, new_role = "ID") %>%
+    step_zv(all_predictors())
+  
+  rf_model <- rand_forest(
+    mtry = tune(),
+    min_n = tune(),
+    trees = 200
+  ) %>%
+    set_engine("ranger", importance = "permutation") %>%
+    set_mode("regression")
+  
+  rf_workflow <- workflow() %>%
+    add_recipe(rf_recipe) %>%
+    add_model(rf_model)
+  
+  n_preds <- train_data %>%
+    select(-biomass_target, -ID, -isim, -isim_id, -year, -species) %>%
+    ncol()
+  
+  rf_grid <- grid_regular(
+    mtry(range = c(1, min(20, n_preds))),
+    min_n(range = c(2, 20)),
+    levels = 5
+  )
+  
+  start_time <- Sys.time()
+  
+  rf_tuned <- tune_grid(
+    rf_workflow,
+    resamples = cv_splits,
+    grid = rf_grid,
+    metrics = metric_set(rmse, rsq, mae)
+  )
+  
+  best_params <- select_best(rf_tuned, metric = "rmse")
+  final_rf <- finalize_workflow(rf_workflow, best_params)
+  rf_fit <- fit(final_rf, data = train_data)
+  
+  rf_preds <- predict(rf_fit, test_data) %>%
+    bind_cols(test_data)
+  
+  end_time <- Sys.time()
+  
+  runtime_min <- as.numeric(difftime(end_time, start_time, units = "mins"))
+  
+  cat("Species:", sp_name,
+      "Model:", "t3",
+      "Runtime (min):", round(runtime_min, 2), "\n")
+  
+  model_metrics <- rf_preds %>%
+    metrics(truth = biomass_target, estimate = .pred) %>%
+    mutate(
+      species = sp_name,
+      model = "t3",
+      runtime_min = as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+    )
+  
+  all_results_m3[[paste0("sp", sp_name)]] <- list(
+    species = sp_name,
+    model = "t3",
+    fit = rf_fit,
+    preds = rf_preds,
+    metrics = model_metrics,
+    tuning = rf_tuned,
+    best_params = best_params
+  )
+  
+  all_metrics_m3[[paste0("sp", sp_name)]] <- model_metrics
+}
 
-ggsave("plots/model1_sp1.png", plot = p3, width = 8, height = 6, dpi = 300)
+model_start <- Sys.time()
+model_end <- Sys.time()
 
+cat("Total runtime for model", model_name, ":",
+    round(as.numeric(difftime(model_end, model_start, units = "mins")), 2),
+    "minutes\n")
 
+}, error = function(e) {
+  cat("Error:", e$message, "\n")
+}, finally = {
+  
+  beep <- readWave("uboot_sonar_sms.wav")
+  play(beep)
+  
+  cat("Model finished at:", Sys.time(), "\n")
+})
+
+metrics_m3 <- bind_rows(all_metrics_m3)
+#metrics_m3
+#p_vip_m3_sp1 <- vip::vip(all_results_m3[["sp1"]]$fit$fit$fit)
+
+for (sp_name in species_list) {
+  
+  result_name <- paste0("sp", sp_name)
+  
+  # Variable importance plot
+  p_vip <- vip::vip(all_results_m0[[result_name]]$fit$fit$fit)
+  
+  ggsave(
+    paste0("plots/RF/M3/var_m3_sp", sp_name, ".png"),
+    plot = p_vip,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+  
+  # Observed vs predicted plot
+  p_model <- all_results_m0[[result_name]]$preds %>%
+    ggplot(aes(x = biomass_target, y = .pred)) +
+    geom_point(alpha = 0.5) +
+    geom_abline(slope = 1, intercept = 0, color = "red") +
+    labs(
+      title = paste0("Observed vs Predicted Mod 3", sp_name),
+      x = "Observed biomass(t)",
+      y = "Predicted biomass(t)"
+    ) +
+    theme_minimal()
+  
+  ggsave(
+    paste0("plots/RF/M3/model_m3_sp", sp_name, ".png"),
+    plot = p_model,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+}
+
+#saveRDS(all_results_m3, "model3_t3_all_species.rds")
+#write.csv(metrics_m3, "model3_t3_all_species.csv", row.names = FALSE)
+
+#****************
+### ALL METRICS ----
+#****************
+
+metrics_all_models <- bind_rows(metrics_m1, metrics_m2, metrics_m3)
+#write.csv(metrics_all_models, "all_models_all_species.csv", row.names = FALSE)
+
+metrics_all_models
+
+ggplot(all_metrics_df, aes(x = factor(species), y = runtime_min)) +
+  geom_col() +
+  facet_wrap(~ model) +
+  labs(x = "Species", y = "Runtime (minutes)")
