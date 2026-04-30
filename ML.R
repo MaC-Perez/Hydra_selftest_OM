@@ -15,6 +15,7 @@ library(yardstick)
 library(dials)
 library(vip)
 library(doParallel)
+library(tuneR)
 
 
 #species_names <- c(
@@ -41,15 +42,13 @@ species_list <- 1:10
 #****************
 ### MODEL 0 ----
 #****************
-
+#sp_name<-1
 model_name <- "m0"
 
 all_results_m0 <- list()
 all_metrics_m0 <- list()
 
 model_start <- Sys.time()
-
-tryCatch({
 
 for (sp_name in species_list) {
   
@@ -173,21 +172,6 @@ for (sp_name in species_list) {
 
 model_end <- Sys.time()
 
-cat("Total runtime for model", model_name, ":",
-    round(as.numeric(difftime(model_end, model_start, units = "mins")), 2),
-    "minutes\n")
-
-}, error = function(e) {
-  cat("Error:", e$message, "\n")
-}, finally = {
-  
-  beep <- readWave("uboot_sonar_sms.wav")
-  play(beep)
-  
-  cat("Model finished at:", Sys.time(), "\n")
-})
-
-
 metrics_m0 <- bind_rows(all_metrics_m0)
 
 #metrics_m0
@@ -237,8 +221,6 @@ for (sp_name in species_list) {
 all_results_m1 <- list()
 all_metrics_m1 <- list()
 
-tryCatch({
-  
 for (sp_name in species_list) {
   model_name <- "t1"
   model_start <- Sys.time()
@@ -356,20 +338,6 @@ for (sp_name in species_list) {
 
 model_end <- Sys.time()
 
-cat("Total runtime for model", model_name, ":",
-    round(as.numeric(difftime(model_end, model_start, units = "mins")), 2),
-    "minutes\n")
-
-}, error = function(e) {
-  cat("Error:", e$message, "\n")
-}, finally = {
-  
-  beep <- readWave("uboot_sonar_sms.wav")
-  play(beep)
-  
-  cat("Model finished at:", Sys.time(), "\n")
-})
-
 metrics_m1 <- bind_rows(all_metrics_m1)
 #metrics_m1
 #p_vip_m1_sp1 <- vip::vip(all_results_m1[["sp1"]]$fit$fit$fit)
@@ -419,8 +387,6 @@ for (sp_name in species_list) {
   
 all_results_m2 <- list()
 all_metrics_m2 <- list()
-
-tryCatch({
 
 for (sp_name in species_list) {
   model_name <- "t2"
@@ -540,20 +506,6 @@ for (sp_name in species_list) {
 }
 
 model_start <- Sys.time()
-cat("Total runtime for model", model_name, ":",
-    round(as.numeric(difftime(model_end, model_start, units = "mins")), 2),
-    "minutes\n")
-
-}, error = function(e) {
-  cat("Error:", e$message, "\n")
-}, finally = {
-  
-  beep <- readWave("uboot_sonar_sms.wav")
-  play(beep)
-  
-  cat("Model finished at:", Sys.time(), "\n")
-})
-
 
 metrics_m2 <- bind_rows(all_metrics_m2)
 #metrics_m2
@@ -605,8 +557,6 @@ for (sp_name in species_list) {
 all_results_m3 <- list()
 all_metrics_m3 <- list()
 
-tryCatch({
-  
 for (sp_name in species_list) {
   model_name <- "t3"
   model_start <- Sys.time()
@@ -727,20 +677,6 @@ for (sp_name in species_list) {
 
 model_start <- Sys.time()
 model_end <- Sys.time()
-
-cat("Total runtime for model", model_name, ":",
-    round(as.numeric(difftime(model_end, model_start, units = "mins")), 2),
-    "minutes\n")
-
-}, error = function(e) {
-  cat("Error:", e$message, "\n")
-}, finally = {
-  
-  beep <- readWave("uboot_sonar_sms.wav")
-  play(beep)
-  
-  cat("Model finished at:", Sys.time(), "\n")
-})
 
 metrics_m3 <- bind_rows(all_metrics_m3)
 #metrics_m3
