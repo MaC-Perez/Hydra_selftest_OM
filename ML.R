@@ -131,9 +131,6 @@ run_xgb_horizon <- function(h, model_label) {
       select(-biomass_target, -ID, -isim, -isim_id, -year, -species) %>%
       ncol()
     
-    # small Latin hypercube grid — keeps runtime close to the ~1.3 min/species
-    # XGBoost showed in the single-species pilot. Increase `size` later for a
-    # more thorough search once you've confirmed the pipeline runs cleanly.
     xgb_grid <- grid_latin_hypercube(
       tree_depth(range = c(3, 8)),
       learn_rate(range = c(-3, -1)),     # log10 scale -> 0.001-0.1
@@ -231,7 +228,125 @@ saveRDS(xgb_t3$results, "xgb_t3_all_species.rds")
 
 metrics_xgb_all
 
+#########
+# tables plots
+#########
 
+library(scales)
+
+dir.create("plots/XGB/summary", recursive = TRUE, showWarnings = FALSE)
+
+metrics_raw <- read_csv("xgb_t2_t3_all_species.csv")
+
+# ---- species names ----
+species_names <- tibble(
+  species = 1:10,
+  species_name = c(
+    "Atlantic cod", "Atlantic herring", "Atlantic mackerel", "Goosefish",
+    "Haddock", "Silver hake", "Spiny dogfish", "Winter flounder",
+    "Winter skate", "Yellowtail flounder"
+  )
+)
+
+ML_data <- readRDS("ML_data.rds")
+
+mean_biomass <- ML_data %>%
+  select(starts_with("biomass_sp")) %>%
+  summarise(across(everything(), ~ mean(.x, na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "species_col", values_to = "mean_biomass") %>%
+  mutate(species = as.integer(str_remove(species_col, "biomass_sp"))) %>%
+  select(species, mean_biomass)
+
+# ---- build wide summary table ----
+summary_table <- metrics_raw %>%
+  pivot_wider(
+    id_cols = c(species, model, runtime_min),
+    names_from = .metric,
+    values_from = .estimate
+  ) %>%
+  left_join(species_names, by = "species") %>%
+  left_join(mean_biomass, by = "species") %>%
+  mutate(
+    horizon = recode(model, t2 = "t+2", t3 = "t+3"),
+    rel_rmse = rmse / mean_biomass * 100,   # RMSE as % of mean biomass
+    rel_mae  = mae  / mean_biomass * 100
+  ) %>%
+  arrange(species, model) %>%
+  select(species, species_name, horizon, rmse, rsq, mae, rel_rmse, rel_mae, runtime_min)
+
+write_csv(summary_table, "xgb_summary_table.csv")
+print(summary_table, n = Inf)
+
+# order species by mean biomass (largest to smallest) for consistent plotting
+sp_order <- mean_biomass %>%
+  left_join(species_names, by = "species") %>%
+  arrange(desc(mean_biomass)) %>%
+  pull(species_name)
+
+summary_table <- summary_table %>%
+  mutate(species_name = factor(species_name, levels = sp_order))
+
+theme_set(theme_minimal(base_size = 13))
+horizon_colors <- c("t+2" = "#4C72B0", "t+3" = "#DD8452")
+
+# ---- Figure: RMSE by species and horizon ----
+p_rmse <- ggplot(summary_table, aes(x = species_name, y = rmse, fill = horizon)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_manual(values = horizon_colors) +
+  labs(title = "XGBoost RMSE by species and forecast horizon",
+       x = NULL, y = "RMSE (mt)", fill = "Horizon") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+
+ggsave("plots/XGB/summary/fig_rmse_by_species.png", p_rmse, width = 9, height = 5.5, dpi = 300)
+
+# ---- Figure: relative RMSE (% of mean biomass) by species and horizon ----
+p_rel_rmse <- ggplot(summary_table, aes(x = species_name, y = rel_rmse, fill = horizon)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_manual(values = horizon_colors) +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(title = "XGBoost relative RMSE by species and forecast horizon",
+       x = NULL, y = "RMSE as % of mean biomass", fill = "Horizon") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+
+ggsave("plots/XGB/summary/fig_relative_rmse_by_species.png", p_rel_rmse, width = 9, height = 5.5, dpi = 300)
+
+# ---- Figure: R^2 by species and horizon ----
+p_rsq <- ggplot(summary_table, aes(x = species_name, y = rsq, fill = horizon)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_manual(values = horizon_colors) +
+  coord_cartesian(ylim = c(0.7, 1.0)) +
+  labs(title = expression("XGBoost R"^2*" by species and forecast horizon"),
+       x = NULL, y = expression(R^2), fill = "Horizon") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+
+ggsave("plots/XGB/summary/fig_rsq_by_species.png", p_rsq, width = 9, height = 5.5, dpi = 300)
+
+# ---- Figure: runtime by species and horizon ----
+p_runtime <- ggplot(summary_table, aes(x = species_name, y = runtime_min, fill = horizon)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_manual(values = horizon_colors) +
+  labs(title = "XGBoost runtime by species and forecast horizon",
+       x = NULL, y = "Runtime (minutes)", fill = "Horizon") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+
+ggsave("plots/XGB/summary/fig_runtime_by_species.png", p_runtime, width = 9, height = 5.5, dpi = 300)
+
+# ---- Figure: t+2 -> t+3 RMSE slope chart, by species ----
+p_slope <- ggplot(summary_table, aes(x = horizon, y = rmse, group = species_name)) +
+  geom_line(color = "grey50", alpha = 0.8) +
+  geom_point(color = "grey30", size = 2) +
+  geom_text(
+    data = summary_table %>% filter(horizon == "t+2"),
+    aes(label = species_name), hjust = 1.05, size = 3.2
+  ) +
+  scale_x_discrete(expand = expansion(mult = c(0.55, 0.15))) +
+  labs(title = "RMSE degradation from t+2 to t+3, by species (XGBoost)",
+       x = NULL, y = "RMSE (mt)")
+
+ggsave("plots/XGB/summary/fig_slope_t2_t3.png", p_slope, width = 7, height = 6, dpi = 300)
+
+cat("Summary table written to xgb_summary_table.csv\n")
+cat("Figures written to plots/XGB/summary/\n")
 
 ############################
 ### trying for cod
