@@ -14,9 +14,6 @@ library(rsample)
 library(yardstick)
 library(dials)
 library(vip)
-library(doParallel)
-library(tuneR)
-
 
 #species_names <- c(
 #  "Atlantic_cod",
@@ -38,6 +35,208 @@ ML_data <- ML_data %>%
 
 species_list <- 1:10
 #species_list <- 1
+
+
+##########
+# XGBOOST
+##########
+
+### XGBOOST — ALL 10 SPECIES, MODELS 2 & 3 (t+2, t+3) ----
+# Adapted from ML.R's Random Forest workflow. Same feature construction,
+# same run-level (isim_id) splitting logic, swapped to boost_tree() / xgboost
+# engine, and generalized into one function so t+2 and t+3 share code instead
+# of being duplicated blocks.
+
+dir.create("plots/XGB", recursive = TRUE, showWarnings = FALSE)
+
+# ---- function: runs one horizon (h years ahead) across all species ----
+run_xgb_horizon <- function(h, model_label) {
+  
+  all_results <- list()
+  all_metrics <- list()
+  folder <- file.path("plots/XGB", toupper(model_label))
+  dir.create(folder, recursive = TRUE, showWarnings = FALSE)
+  
+  for (sp_name in species_list) {
+    
+    cat("Running XGBoost", model_label, "- species:", sp_name, "\n")
+    
+    target_col <- paste0("biomass_sp", sp_name)
+    
+    # base features: target h years ahead, F at t
+    features_full <- ML_data %>%
+      arrange(ID, isim, year) %>%
+      distinct(ID, isim, year, .keep_all = TRUE) %>%
+      group_by(ID, isim) %>%
+      mutate(
+        biomass_target = lead(.data[[target_col]], h),
+        F_t = F
+      )
+    
+    # add F_t1 ... F_t{h} (forward F trajectory through the horizon)
+    for (k in 1:h) {
+      features_full <- features_full %>%
+        mutate(!!paste0("F_t", k) := lead(F, k))
+    }
+    
+    features_full <- features_full %>%
+      ungroup() %>%
+      mutate(
+        species = sp_name,
+        isim_id = paste(ID, isim, sep = "_")
+      ) %>%
+      select(
+        ID, isim, isim_id, species, year,
+        biomass_target,
+        F_t, matches(paste0("^F_t[1-", h, "]$")),
+        starts_with("biomass_sp")
+      ) %>%
+      drop_na()
+    
+    set.seed(123)
+    
+    runs <- unique(features_full$isim_id)
+    train_runs <- sample(runs, size = floor(0.80 * length(runs)))  # 80/20 split
+    
+    train_data <- features_full %>%
+      filter(isim_id %in% train_runs) %>%
+      arrange(isim_id, year)
+    
+    test_data <- features_full %>%
+      filter(!isim_id %in% train_runs) %>%
+      arrange(isim_id, year)
+    
+    cv_splits <- group_vfold_cv(train_data, group = isim_id, v = 5)
+    
+    xgb_recipe <- recipe(biomass_target ~ ., data = train_data) %>%
+      update_role(ID, isim, isim_id, year, species, new_role = "ID") %>%
+      step_zv(all_predictors())
+    
+    xgb_model <- boost_tree(
+      trees          = 200,
+      tree_depth     = tune(),
+      learn_rate     = tune(),
+      loss_reduction = tune(),
+      sample_size    = tune(),
+      mtry           = tune()
+    ) %>%
+      set_engine("xgboost", importance = "gain") %>%
+      set_mode("regression")
+    
+    xgb_workflow <- workflow() %>%
+      add_recipe(xgb_recipe) %>%
+      add_model(xgb_model)
+    
+    n_preds <- train_data %>%
+      select(-biomass_target, -ID, -isim, -isim_id, -year, -species) %>%
+      ncol()
+    
+    # small Latin hypercube grid — keeps runtime close to the ~1.3 min/species
+    # XGBoost showed in the single-species pilot. Increase `size` later for a
+    # more thorough search once you've confirmed the pipeline runs cleanly.
+    xgb_grid <- grid_latin_hypercube(
+      tree_depth(range = c(3, 8)),
+      learn_rate(range = c(-3, -1)),     # log10 scale -> 0.001-0.1
+      loss_reduction(),
+      sample_prop(range = c(0.5, 1)),
+      mtry(range = c(1, min(15, n_preds))),
+      size = 10
+    )
+    
+    start_time <- Sys.time()
+    
+    xgb_tuned <- tune_grid(
+      xgb_workflow,
+      resamples = cv_splits,
+      grid = xgb_grid,
+      metrics = metric_set(rmse, rsq, mae)
+    )
+    
+    best_params <- select_best(xgb_tuned, metric = "rmse")
+    final_xgb <- finalize_workflow(xgb_workflow, best_params)
+    xgb_fit <- fit(final_xgb, data = train_data)
+    
+    xgb_preds <- predict(xgb_fit, test_data) %>%
+      bind_cols(test_data)
+    
+    end_time <- Sys.time()
+    runtime_min <- as.numeric(difftime(end_time, start_time, units = "mins"))
+    
+    cat("Species:", sp_name,
+        "Model:", model_label,
+        "Runtime (min):", round(runtime_min, 2), "\n")
+    
+    model_metrics <- xgb_preds %>%
+      metrics(truth = biomass_target, estimate = .pred) %>%
+      mutate(
+        species = sp_name,
+        model = model_label,
+        runtime_min = runtime_min
+      )
+    
+    all_results[[paste0("sp", sp_name)]] <- list(
+      species = sp_name,
+      model = model_label,
+      fit = xgb_fit,
+      preds = xgb_preds,
+      metrics = model_metrics,
+      tuning = xgb_tuned,
+      best_params = best_params
+    )
+    
+    all_metrics[[paste0("sp", sp_name)]] <- model_metrics
+  }
+  
+  metrics_all <- bind_rows(all_metrics)
+  
+  # plots, per species
+  for (sp_name in species_list) {
+    result_name <- paste0("sp", sp_name)
+    
+    p_vip <- vip::vip(all_results[[result_name]]$fit$fit$fit)
+    ggsave(
+      file.path(folder, paste0("var_", model_label, "_sp", sp_name, ".png")),
+      plot = p_vip, width = 8, height = 6, dpi = 300
+    )
+    
+    p_model <- all_results[[result_name]]$preds %>%
+      ggplot(aes(x = biomass_target, y = .pred)) +
+      geom_point(alpha = 0.5) +
+      geom_abline(slope = 1, intercept = 0, color = "red") +
+      labs(
+        title = paste0("XGBoost Observed vs Predicted - ", model_label, " - species ", sp_name),
+        x = paste0("Observed biomass (t+", h, ")"),
+        y = paste0("Predicted biomass (t+", h, ")")
+      ) +
+      theme_minimal()
+    
+    ggsave(
+      file.path(folder, paste0("model_", model_label, "_sp", sp_name, ".png")),
+      plot = p_model, width = 8, height = 6, dpi = 300
+    )
+  }
+  
+  list(results = all_results, metrics = metrics_all)
+}
+
+# ---- run both horizons across all 10 species ----
+xgb_t2 <- run_xgb_horizon(h = 2, model_label = "t2")
+xgb_t3 <- run_xgb_horizon(h = 3, model_label = "t3")
+
+metrics_xgb_all <- bind_rows(xgb_t2$metrics, xgb_t3$metrics)
+
+write.csv(metrics_xgb_all, "xgb_t2_t3_all_species.csv", row.names = FALSE)
+saveRDS(xgb_t2$results, "xgb_t2_all_species.rds")
+saveRDS(xgb_t3$results, "xgb_t3_all_species.rds")
+
+metrics_xgb_all
+
+
+
+############################
+### trying for cod
+############################
+
 
 #****************
 ### MODEL 0 ----
